@@ -1,0 +1,91 @@
+react_Vision Android Setup & Build Guide
+========================================
+
+Prerequisites
+-------------
+1. Node.js >= 18
+2. JDK 11
+3. Android Studio with SDK 34
+4. React Native CLI globally available (optional but helpful)
+5. A real ONNX model file (see step 5)
+
+Step 1 — Install Dependencies
+------------------------------
+cd react_Vision
+npm install
+
+Step 2 — Place ONNX Model
+--------------------------
+Export your trained model to ONNX and place it here:
+  react_Vision/src/assets/partlite_unet.onnx
+
+The placeholder file (45 bytes) MUST be replaced. If you don't have
+a model yet, create a dummy one in Python:
+
+  import torch
+  import torch.nn as nn
+  dummy = nn.Sequential(nn.Conv2d(3, 24, 1))
+  torch.onnx.export(dummy, torch.randn(1, 3, 640, 640),
+                    "partlite_unet.onnx",
+                    input_names=["input"], output_names=["seg"],
+                    opset_version=17)
+
+This dummy model exports 24 channels (matches NUM_CLASSES=24) and
+lets you verify the inference pipeline works end-to-end.
+
+Step 3 — Verify Metro Can Bundle the Model
+------------------------------------------
+Start Metro bundler and watch for errors:
+  npx react-native start
+
+If Metro complains about .onnx resolution, check metro.config.js
+already includes 'onnx' in assetExts.
+
+Step 4 — Connect Android Device or Start Emulator
+--------------------------------------------------
+  adb devices
+
+Make sure at least one device/emulator is listed.
+
+Step 5 — Build and Install
+---------------------------
+  cd react_Vision
+  npx react-native run-android
+
+Step 6 — Initial Testing
+-------------------------
+- On first launch, grant camera permission when prompted.
+- The app will attempt to load the ONNX model.
+- If successful, you should see the camera feed with colored
+  bounding boxes (cyan for bumpers/lights, yellow for others).
+- If you used the dummy model, boxes will be noise — that's expected.
+  Replace with your real trained model for meaningful detections.
+
+Step 7 — Tuning After First Successful Run
+--------------------------------------------
+Once the pipeline works, adjust these in src/utils/constants.ts:
+  - CONFIDENCE_THRESHOLD: start at 0.3, raise toward 0.85
+  - INFERENCE_FPS: 6 is conservative; raise if device handles it
+  - EXECUTION_PROVIDER: change to 'wasm' if you add that runtime
+
+Troubleshooting
+---------------
+"Model load failed" Alert:
+  - Check logcat: adb logcat | grep -i onnx
+  - Verify partlite_unet.onnx exists in src/assets/
+  - Verify the model is a valid ONNX file (check with Python onnx.checker)
+
+App crashes on launch before camera:
+  - Run npx react-native logcat to see JS errors
+  - Check for stray react-native-worklets imports (should be none)
+  - Verify node_modules is installed
+
+Gradle build fails:
+  - Ensure ANDROID_HOME is set
+  - Ensure JDK 11 is used (not 17+)
+  - Run ./gradlew clean in react_Vision/android and retry
+
+No bounding boxes appear:
+  - Lower CONFIDENCE_THRESHOLD to 0.1 temporarily
+  - Check if the model output shape matches expected [1, 24, 640, 640]
+  - Verify imageUtils.ts preprocessing matches model training input

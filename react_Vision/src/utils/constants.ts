@@ -1,5 +1,7 @@
-export const BACKEND_URL =
-  process.env.BACKEND_URL ?? 'ws://192.168.1.1:8000/ws/segment';
+export const BACKEND_URL = 'ws://localhost:8000/ws/segment';
+
+export const GITHUB_CONFIG_URL =
+  'https://raw.githubusercontent.com/PartVision/config/main/backend.json';
 
 export const CAMERA_CONFIG = {
   TARGET_FRAME_WIDTH: 640,
@@ -14,8 +16,6 @@ export const WEBSOCKET_CONFIG = {
   FRAME_DEBOUNCE_MS: 66,
 };
 
-export const UI_CONFIG = {
-  HUD_HEIGHT: 60,
-  ACTION_BUTTON_WIDTH: 110,
-  ACTION_BUTTON_HEIGHT: 54,
+export const CONFIG_CONFIG = {
+  REFRESH_INTERVAL_MS: 5 * 60 * 1000,
 };

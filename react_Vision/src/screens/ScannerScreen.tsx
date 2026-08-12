@@ -9,6 +9,7 @@ import { runOnJS } from 'react-native-worklets';
 
 import WebSocketManager from '../managers/WebSocketManager';
 import { CameraManager } from '../managers/CameraManager';
+import { configManager } from '../managers/ConfigManager';
 import {
   PartDetection,
   ConnectionState,
@@ -18,47 +19,22 @@ import BoundingBoxOverlay from '../components/BoundingBoxOverlay';
 import ScannerHUD from '../components/ScannerHUD';
 
 const cameraManager = new CameraManager(640, 0.5);
-const wsManager = new WebSocketManager();
+const wsManager = new WebSocketManager('ws://localhost:8000/ws/segment');
 
 export default function ScannerScreen() {
   const [hasPermission, setHasPermission] = useState(false);
   const [cameraPosition, setCameraPosition] = useState<'back' | 'front'>('back');
   const [detections, setDetections] = useState<PartDetection[]>([]);
   const [wsState, setWsState] = useState<ConnectionState>('disconnected');
-  const [statusText, setStatusText] = useState<string>('Connecting...');
+  const [statusText, setStatusText] = useState<string>('Loading config...');
   const devices = useCameraDevices();
   const lastSendTime = useRef(0);
   const frameCounter = useRef(0);
+  const configLoaded = useRef(false);
 
+  // --- Camera permission ---
   useEffect(() => {
     checkPermission();
-  }, []);
-
-  useEffect(() => {
-    wsManager.onState((state: ConnectionState) => {
-      setWsState(state);
-      if (state === 'connected') {
-        setStatusText('Connected');
-      } else if (state === 'disconnected') {
-        setStatusText('Reconnecting...');
-      } else if (state === 'connecting') {
-        setStatusText('Connecting...');
-      }
-    });
-
-    wsManager.onDetections((dets: PartDetection[]) => {
-      setDetections(dets);
-    });
-
-    wsManager.onError((msg: string) => {
-      setStatusText(msg);
-    });
-
-    wsManager.connect();
-
-    return () => {
-      wsManager.disconnect();
-    };
   }, []);
 
   const checkPermission = useCallback(async () => {
@@ -66,17 +42,56 @@ export default function ScannerScreen() {
     setHasPermission(status === 'authorized');
   }, []);
 
+  // --- Load dynamic backend URL from GitHub config, then connect ---
+  useEffect(() => {
+    if (!hasPermission) return;
+
+    (async () => {
+      try {
+        const url = await configManager.getBackendUrl();
+        wsManager.setUrl(url);
+        setStatusText(`Connecting to ${url.replace('ws://', '').replace('wss://', '')}`);
+      } catch {
+        setStatusText('Using localhost fallback');
+      }
+
+      wsManager.connect();
+      configLoaded.current = true;
+
+      wsManager.onState((state: ConnectionState) => {
+        setWsState(state);
+        if (state === 'connected') setStatusText('Connected');
+        else if (state === 'connecting') setStatusText('Connecting...');
+        else setStatusText('Reconnecting...');
+      });
+
+      wsManager.onDetections((dets: PartDetection[]) => {
+        setDetections(dets);
+      });
+
+      wsManager.onError((msg: string) => {
+        setStatusText(msg);
+      });
+    })();
+
+    return () => {
+      wsManager.disconnect();
+    };
+  }, [hasPermission]);
+
+  // --- Frame pipeline: camera → JPEG → WebSocket ---
   const sendFrameToJS = useCallback((bytes: Uint8Array) => {
-    if (!bytes || bytes.length === 0) return;
+    if (!bytes || bytes.length === 0 || wsState !== 'connected') return;
 
     const now = Date.now();
     frameCounter.current++;
 
+    // Debounce: ~15 FPS max
     if (now - lastSendTime.current < 66) return;
     lastSendTime.current = now;
 
     wsManager.sendFrame(bytes);
-  }, []);
+  }, [wsState]);
 
   const frameProcessor = useFrameProcessor((frame) => {
     'worklet';

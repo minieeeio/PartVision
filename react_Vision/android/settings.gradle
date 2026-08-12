@@ -1,0 +1,6 @@
+rootProject.name = 'react_vision'
+include ':app'
+include ':react-native-vision-camera'
+project(':react-native-vision-camera').dir = new File(rootProject.projectDir, '../node_modules/react-native-vision-camera/android')
+include ':react-native-reanimated'
+project(':react-native-reanimated').dir = new File(rootProject.projectDir, '../node_modules/react-native-reanimated/android')

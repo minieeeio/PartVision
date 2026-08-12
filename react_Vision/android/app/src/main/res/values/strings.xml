@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">react_vision</string>
+    <string name="app_label">PartVision</string>
+    <string name="title_activity">react_vision</string>
+</resources>

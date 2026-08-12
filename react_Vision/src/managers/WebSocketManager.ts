@@ -3,7 +3,6 @@ import {
   DetectionResponse,
   PartDetection,
 } from '../models/DetectionModel';
-import { WEBSOCKET_CONFIG, BACKEND_URL } from '../utils/constants';
 
 export type StateListener = (state: ConnectionState) => void;
 export type DetectionListener = (detections: PartDetection[]) => void;
@@ -11,9 +10,10 @@ export type ErrorListener = (message: string) => void;
 
 export class WebSocketManager {
   private ws: WebSocket | null = null;
-  private url: string = BACKEND_URL;
+  private url: string;
   private reconnectAttempts = 0;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
   private state: ConnectionState = 'disconnected';
   private detections: PartDetection[] = [];
@@ -22,6 +22,14 @@ export class WebSocketManager {
   private stateListeners: StateListener[] = [];
   private detectionListeners: DetectionListener[] = [];
   private errorListeners: ErrorListener[] = [];
+
+  constructor(url: string) {
+    this.url = url;
+  }
+
+  setUrl(url: string): void {
+    this.url = url;
+  }
 
   connect(): void {
     if (this.state === 'connecting' || this.state === 'connected') return;
@@ -43,6 +51,7 @@ export class WebSocketManager {
   private onOpen(): void {
     this.state = 'connected';
     this.reconnectAttempts = 0;
+    this.startHeartbeat();
     this.notifyState();
   }
 
@@ -68,6 +77,7 @@ export class WebSocketManager {
 
   private onClose(): void {
     this.ws = null;
+    this.stopHeartbeat();
     const wasConnected = this.state === 'connected';
     this.state = 'disconnected';
     this.notifyState();
@@ -75,15 +85,32 @@ export class WebSocketManager {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectAttempts >= WEBSOCKET_CONFIG.MAX_RECONNECT_ATTEMPTS) {
+    if (this.reconnectAttempts >= 10) {
       this.notifyError('Max reconnect attempts reached');
       return;
     }
-    const delay =
-      WEBSOCKET_CONFIG.RECONNECT_INTERVAL_MS *
-      Math.pow(1.5, this.reconnectAttempts);
+    const delay = 2000 * Math.pow(1.5, this.reconnectAttempts);
     this.reconnectAttempts++;
     this.reconnectTimeout = setTimeout(() => this.connect(), delay);
+  }
+
+  private startHeartbeat(): void {
+    this.heartbeatInterval = setInterval(() => {
+      if (this.ws && this.state === 'connected') {
+        try {
+          this.ws.send('ping');
+        } catch {
+          // heartbeat send failure is non-fatal
+        }
+      }
+    }, 15000);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
   }
 
   sendFrame(data: Uint8Array | ArrayBuffer): void {
@@ -103,6 +130,7 @@ export class WebSocketManager {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
+    this.stopHeartbeat();
     this.ws?.close();
     this.ws = null;
     this.state = 'disconnected';
@@ -136,4 +164,13 @@ export class WebSocketManager {
   private notifyError(msg: string): void {
     this.errorListeners.forEach((l) => l(msg));
   }
+
+  destroy(): void {
+    this.disconnect();
+    this.stateListeners = [];
+    this.detectionListeners = [];
+    this.errorListeners = [];
+  }
 }
+
+export default WebSocketManager;

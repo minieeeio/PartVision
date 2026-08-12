@@ -1,0 +1,15 @@
+# react.gradle
+# Minimal React Native gradle integration file
+# Handles bundling JS for release builds
+
+def doAsyncOffscreen(var) {
+    // No-op placeholder for async build operations
+}
+
+afterEvaluate { project ->
+    project.tasks.matching {
+        it.name.startsWith("install") || it.name.startsWith("uninstall") || it.name.contains("assemble")
+    }.all { task ->
+        task.doAsyncOffscreen = { var -> }
+    }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "react_vision",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Live car-part detection AR client for PartVision backend — live camera streaming with real-time bounding box overlays over WebSocket.",
+  "scripts": {
+    "android": "react-native run-android",
+    "ios": "react-native run-ios",
+    "lint": "eslint src --ext .ts,.tsx",
+    "typecheck": "tsc --noEmit",
+    "start": "react-native start",
+    "clean": "watchman watch-del-all && rm -rf node_modules && npm install"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-native": "0.74.3",
+    "react-native-vision-camera": "4.0.17",
+    "react-native-reanimated": "3.10.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.0",
+    "@babel/preset-env": "^7.24.0",
+    "@babel/preset-typescript": "^7.24.0",
+    "@react-native-community/eslint-config": "^5.0.0",
+    "@types/react": "^18.2.0",
+    "@types/react-native": "^0.74.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.2.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

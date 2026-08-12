@@ -1,7 +1,11 @@
-export const BACKEND_URL = 'ws://localhost:8000/ws/segment';
-
-export const GITHUB_CONFIG_URL =
-  'https://raw.githubusercontent.com/PartVision/config/main/backend.json';
+export const INFERENCE_CONFIG = {
+  MODEL_PATH: require('../assets/partlite_unet.onnx') as number,
+  TARGET_SIZE: 640,
+  NUM_CLASSES: 24,
+  CONFIDENCE_THRESHOLD: 0.3,
+  INFERENCE_FPS: 6,
+  EXECUTION_PROVIDER: 'cpu' as 'cpu' | 'wasm',
+};
 
 export const CAMERA_CONFIG = {
   TARGET_FRAME_WIDTH: 640,
@@ -9,13 +13,35 @@ export const CAMERA_CONFIG = {
   MAX_FPS: 15,
 };
 
-export const WEBSOCKET_CONFIG = {
-  RECONNECT_INTERVAL_MS: 2000,
-  MAX_RECONNECT_ATTEMPTS: 10,
-  HEARTBEAT_INTERVAL_MS: 15000,
-  FRAME_DEBOUNCE_MS: 66,
+export const CLASS_LABELS: Record<number, string> = {
+  0: 'BACKGROUND',
+  1: 'BACK_BUMPER',
+  2: 'BACK_DOOR',
+  3: 'BACK_GLASS',
+  4: 'BACK_LEFT_DOOR',
+  5: 'BACK_LEFT_LIGHT',
+  6: 'BACK_LIGHT',
+  7: 'BACK_RIGHT_DOOR',
+  8: 'BACK_RIGHT_LIGHT',
+  9: 'FRONT_BUMPER',
+  10: 'FRONT_DOOR',
+  11: 'FRONT_GLASS',
+  12: 'FRONT_LEFT_DOOR',
+  13: 'FRONT_LEFT_LIGHT',
+  14: 'FRONT_LIGHT',
+  15: 'FRONT_RIGHT_DOOR',
+  16: 'FRONT_RIGHT_LIGHT',
+  17: 'HOOD',
+  18: 'LEFT_MIRROR',
+  19: 'OBJECT',
+  20: 'RIGHT_MIRROR',
+  21: 'TAILGATE',
+  22: 'TRUNK',
+  23: 'WHEEL',
 };
 
-export const CONFIG_CONFIG = {
-  REFRESH_INTERVAL_MS: 5 * 60 * 1000,
+export const UI_CONFIG = {
+  HUD_HEIGHT: 60,
+  ACTION_BUTTON_WIDTH: 110,
+  ACTION_BUTTON_HEIGHT: 54,
 };

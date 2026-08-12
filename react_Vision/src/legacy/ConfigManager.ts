@@ -1,4 +1,7 @@
-import { BACKEND_URL, GITHUB_CONFIG_URL, CONFIG_CONFIG } from '../utils/constants';
+const BACKEND_URL = 'ws://192.168.1.1:8000/ws/segment';
+const GITHUB_CONFIG_URL =
+  'https://raw.githubusercontent.com/PartVision/config/main/backend.json';
+const CONFIG_CONFIG = { REFRESH_INTERVAL_MS: 5 * 60 * 1000 };
 
 export interface BackendConfig {
   websocket_url: string;

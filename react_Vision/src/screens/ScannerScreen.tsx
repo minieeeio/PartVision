@@ -1,40 +1,48 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { StyleSheet, View, Alert } from 'react-native';
 import {
   Camera,
   useCameraDevices,
   useFrameProcessor,
 } from 'react-native-vision-camera';
-import { runOnJS } from 'react-native-worklets';
+import { runOnJS, useSharedValue } from 'react-native-reanimated';
 
-import WebSocketManager from '../managers/WebSocketManager';
-import { CameraManager } from '../managers/CameraManager';
-import { configManager } from '../managers/ConfigManager';
-import {
-  PartDetection,
-  ConnectionState,
-} from '../models/DetectionModel';
+import { inferenceManager } from '../managers/InferenceManager';
+import { PartDetection } from '../models/DetectionModel';
 import CameraPreview from '../components/CameraPreview';
 import BoundingBoxOverlay from '../components/BoundingBoxOverlay';
 import ScannerHUD from '../components/ScannerHUD';
-
-const cameraManager = new CameraManager(640, 0.5);
-const wsManager = new WebSocketManager('ws://localhost:8000/ws/segment');
+import { INFERENCE_CONFIG } from '../utils/constants';
 
 export default function ScannerScreen() {
   const [hasPermission, setHasPermission] = useState(false);
   const [cameraPosition, setCameraPosition] = useState<'back' | 'front'>('back');
   const [detections, setDetections] = useState<PartDetection[]>([]);
-  const [wsState, setWsState] = useState<ConnectionState>('disconnected');
-  const [statusText, setStatusText] = useState<string>('Loading config...');
+  const [statusText, setStatusText] = useState<string>('Loading model...');
   const devices = useCameraDevices();
-  const lastSendTime = useRef(0);
-  const frameCounter = useRef(0);
-  const configLoaded = useRef(false);
+  const lastInferenceTime = useSharedValue(0);
+  const modelLoaded = useSharedValue(false);
 
-  // --- Camera permission ---
   useEffect(() => {
-    checkPermission();
+    (async () => {
+      setStatusText('Loading ONNX model...');
+      const success = await inferenceManager.load();
+      if (success) {
+        modelLoaded.value = true;
+        setStatusText('Ready — point camera at a car');
+      } else {
+        modelLoaded.value = false;
+        Alert.alert(
+          'Model load failed',
+          'Place partlite_unet.onnx in react_Vision/src/assets/',
+        );
+        setStatusText('Model load failed');
+      }
+    })();
+
+    return () => {
+      inferenceManager.dispose();
+    };
   }, []);
 
   const checkPermission = useCallback(async () => {
@@ -42,82 +50,42 @@ export default function ScannerScreen() {
     setHasPermission(status === 'authorized');
   }, []);
 
-  // --- Load dynamic backend URL from GitHub config, then connect ---
   useEffect(() => {
-    if (!hasPermission) return;
+    checkPermission();
+  }, [checkPermission]);
 
-    (async () => {
-      try {
-        const url = await configManager.getBackendUrl();
-        wsManager.setUrl(url);
-        setStatusText(`Connecting to ${url.replace('ws://', '').replace('wss://', '')}`);
-      } catch {
-        setStatusText('Using localhost fallback');
-      }
-
-      wsManager.connect();
-      configLoaded.current = true;
-
-      wsManager.onState((state: ConnectionState) => {
-        setWsState(state);
-        if (state === 'connected') setStatusText('Connected');
-        else if (state === 'connecting') setStatusText('Connecting...');
-        else setStatusText('Reconnecting...');
-      });
-
-      wsManager.onDetections((dets: PartDetection[]) => {
-        setDetections(dets);
-      });
-
-      wsManager.onError((msg: string) => {
-        setStatusText(msg);
-      });
-    })();
-
-    return () => {
-      wsManager.disconnect();
-    };
-  }, [hasPermission]);
-
-  // --- Frame pipeline: camera → JPEG → WebSocket ---
-  const sendFrameToJS = useCallback((bytes: Uint8Array) => {
-    if (!bytes || bytes.length === 0 || wsState !== 'connected') return;
-
+  const processFrame = useCallback((rgba: Uint8Array, width: number, height: number) => {
     const now = Date.now();
-    frameCounter.current++;
+    if (now - lastInferenceTime.value < 166) return;
+    lastInferenceTime.value = now;
 
-    // Debounce: ~15 FPS max
-    if (now - lastSendTime.current < 66) return;
-    lastSendTime.current = now;
-
-    wsManager.sendFrame(bytes);
-  }, [wsState]);
+    inferenceManager
+      .infer(rgba, width, height)
+      .then((dets) => setDetections(dets))
+      .catch((e) => console.error('[ScannerScreen] Inference error:', e));
+  }, []);
 
   const frameProcessor = useFrameProcessor((frame) => {
     'worklet';
-    if (wsState !== 'connected' || !frame) return;
+    if (!modelLoaded.value || !frame) return;
 
-    const bytes = cameraManager.encoder.encodeJpegFromFrame(frame);
-    if (bytes) {
-      runOnJS(sendFrameToJS)(bytes);
+    const rgba = frame.toRGBA();
+    if (rgba) {
+      runOnJS(processFrame)(rgba, frame.width, frame.height);
     }
-  }, [wsState, sendFrameToJS]);
+  }, [processFrame]);
 
   const activeDevice = devices[cameraPosition];
-  const isConnected = wsState === 'connected';
 
   const handleScanTapped = () => {
-    if (isConnected) {
-      wsManager.disconnect();
-      wsManager.connect();
-    }
+    setCameraPosition((prev) => (prev === 'back' ? 'front' : 'back'));
   };
 
   if (!hasPermission || !activeDevice) {
     return (
       <View style={styles.center}>
         <ScannerHUD
-          isConnected={isConnected}
+          isConnected={true}
           onScanTapped={handleScanTapped}
           statusText="Requesting camera permission..."
         />
@@ -127,10 +95,14 @@ export default function ScannerScreen() {
 
   return (
     <View style={styles.container}>
-      <CameraPreview device={activeDevice} frameProcessor={frameProcessor} />
+      <CameraPreview
+        device={activeDevice}
+        frameProcessor={frameProcessor}
+        frameProcessorFps={INFERENCE_CONFIG.INFERENCE_FPS}
+      />
       <BoundingBoxOverlay detections={detections} />
       <ScannerHUD
-        isConnected={isConnected}
+        isConnected={modelLoaded.value}
         onScanTapped={handleScanTapped}
         statusText={statusText}
       />

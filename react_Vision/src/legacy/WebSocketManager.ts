@@ -2,7 +2,7 @@ import {
   ConnectionState,
   DetectionResponse,
   PartDetection,
-} from '../models/DetectionModel';
+} from '../../models/DetectionModel';
 
 export type StateListener = (state: ConnectionState) => void;
 export type DetectionListener = (detections: PartDetection[]) => void;

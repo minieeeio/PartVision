@@ -4,9 +4,9 @@ import cv2
 import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.core.decoder import FrameDecoder
-from app.core.postprocess import PostProcessor
-from app.models.model_loader import PartLiteUNetWrapper
+from core.decoder import FrameDecoder
+from core.postprocess import PostProcessor
+from models.model_loader import PartLiteUNetWrapper
 from config import settings
 
 router = APIRouter()

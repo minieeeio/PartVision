@@ -2,7 +2,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.websocket import router as websocket_router
+from api.websocket import router as websocket_router
 from config import settings
 
 # 1. Initialize FastAPI Application Instance

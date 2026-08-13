@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, View, ActivityIndicator } from 'react-native';
+import { StyleSheet, Text, View, ActivityIndicator,PermissionsAndroid } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { Camera } from 'react-native-vision-camera';
+// Explicitly import Camera from react-native-vision-camera ONLY
+import { Camera } from 'react-native-vision-camera'; 
 import { ScannerScreen } from './src/screens/ScannerScreen';
 
 export default function App() {
@@ -9,8 +10,21 @@ export default function App() {
 
   useEffect(() => {
     (async () => {
-      const status = await Camera.requestCameraPermission();
-      setHasPermission(status === 'granted');
+      try {
+        const permissionGranted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA, {
+        title: 'Permission Query',
+        message:
+          'PartVision want to access your camera.',
+        buttonNegative: 'Deny',
+        buttonPositive: 'Allow',
+      });
+      if ('granted' === PermissionsAndroid.RESULTS.GRANTED) {
+        setHasPermission(true)
+    }
+      } catch (e) {
+        console.warn(e)
+        setHasPermission(false);
+      }
     })();
   }, []);
 
@@ -25,7 +39,7 @@ export default function App() {
   if (!hasPermission) {
     return (
       <View style={styles.center}>
-        <Text style={styles.errorText}>CAMERA PERMISSION IS REQUIRED TO USE CORE_SCAN</Text>
+        <Text style={styles.errorText}>CAMERA PERMISSION IS REQUIRED</Text>
       </View>
     );
   }
@@ -42,5 +56,5 @@ export default function App() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000000' },
   center: { flex: 1, backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' },
-  errorText: { color: '#FF0055', fontFamily: 'monospace', textAlign: 'center', padding: 20 },
+  errorText: { color: '#FF0055', textAlign: 'center', padding: 20 },
 });

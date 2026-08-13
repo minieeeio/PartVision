@@ -11,7 +11,8 @@
       "icon": "./assets/expo.icon",
       "infoPlist": {
         "NSCameraUsageDescription": "PartVision needs access to your camera to detect car parts in real time."
-      }
+      },
+      "bundleIdentifier": "com.anonymous.PartVision"
     },
     "android": {
       "adaptiveIcon": {
@@ -21,29 +22,15 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "permissions": ["android.permission.CAMERA"]
+      "permissions": [
+        "android.permission.CAMERA"
+      ],
+      "package": "com.anonymous.PartVision"
     },
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
-    "plugins": [
-      [
-        "react-native-vision-camera",
-        {
-          "cameraPermissionText": "PartVision needs access to your camera to detect car parts in real time."
-        }
-      ],
-      "expo-router",
-      [
-        "expo-splash-screen",
-        {
-          "backgroundColor": "#208AEF",
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
-        }
-      ]
-    ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true

@@ -1,13 +1,14 @@
 import Constants from 'expo-constants';
 
-const DEFAULT_BACKEND_URL = 'ws://192.168.1.100:5555/ws/segment';
 const GITHUB_CONFIG_URL = 'https://raw.githubusercontent.com/PrageshShrestha/hasslefree/main/partVision';
 const WS_PATH = '/ws/segment';
+const FETCH_TIMEOUT_MS = 10000;
+const MAX_RETRIES = 3;
 
 export const BACKEND_URL: string =
   Constants?.manifest?.extra?.backendUrl ||
   Constants?.expoConfig?.extra?.backendUrl ||
-  DEFAULT_BACKEND_URL;
+  '';
 
 export const WS_FRAME_INTERVAL_MS = 200;
 export const MAX_RECONNECT_ATTEMPTS = 10;
@@ -17,9 +18,13 @@ export interface BackendConfig {
   api_base_url: string;
 }
 
-export async function fetchBackendUrl(): Promise<string> {
-  try {
-    console.log(`[Config] Fetching backend config from ${GITHUB_CONFIG_URL}...`);
+async function fetchConfigWithRetry(attempt = 1): Promise<BackendConfig> {
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('Request timed out')), FETCH_TIMEOUT_MS);
+  });
+
+  const fetchPromise = (async (): Promise<BackendConfig> => {
+    console.log(`[Config] Fetching backend config from ${GITHUB_CONFIG_URL}... (attempt ${attempt}/${MAX_RETRIES})`);
     const response = await fetch(GITHUB_CONFIG_URL, {
       headers: { Accept: 'application/json' },
     });
@@ -31,12 +36,34 @@ export async function fetchBackendUrl(): Promise<string> {
     if (!config?.api_base_url) {
       throw new Error('Missing api_base_url in config');
     }
+    return config;
+  })();
+
+  try {
+    return await Promise.race([fetchPromise, timeoutPromise]);
+  } catch (err) {
+    if (attempt < MAX_RETRIES) {
+      console.warn(`[Config] Retrying... (${attempt}/${MAX_RETRIES})`);
+      await new Promise(r => setTimeout(r, 1000 * attempt));
+      return fetchConfigWithRetry(attempt + 1);
+    }
+    throw err;
+  }
+}
+
+export async function fetchBackendUrl(): Promise<string> {
+  if (BACKEND_URL) {
+    return BACKEND_URL;
+  }
+
+  try {
+    const config = await fetchConfigWithRetry();
     const host = config.api_base_url.replace(/^https?:\/\//, '').replace(/\/$/, '');
     const wsUrl = `wss://${host}${WS_PATH}`;
     console.log(`[Config] Resolved WebSocket URL: ${wsUrl}`);
     return wsUrl;
   } catch (err) {
-    console.warn('[Config] Falling back to default backend URL:', err);
-    return DEFAULT_BACKEND_URL;
+    console.error('[Config] Failed to resolve backend URL after retries:', err);
+    throw new Error('Cannot connect: backend URL not configured and remote config is unreachable.');
   }
 }

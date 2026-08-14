@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { PartDetection, DetectionResponse } from '../types/detection';
+import { PartDetection, DetectionResponse, LocationData } from '../types/detection';
 import { EncodedFrameData } from '../utils/frameEncoder';
 import {
   WS_FRAME_INTERVAL_MS,
@@ -7,7 +7,7 @@ import {
   RECONNECT_BASE_DELAY_MS,
 } from '../config/backend';
 
-export const useWebSocket = (url: string) => {
+export const useWebSocket = (url: string, location: LocationData | null) => {
   const [isConnected, setIsConnected] = useState(false);
   const [detections, setDetections] = useState<PartDetection[]>([]);
   const ws = useRef<WebSocket | null>(null);
@@ -17,6 +17,19 @@ export const useWebSocket = (url: string) => {
   const lastSendTime = useRef(0);
   const isSendingFrame = useRef(false);
 
+  const sendLocation = useCallback(async (loc: LocationData) => {
+    try {
+      const baseUrl = url.replace(/^wss?:\/\//, 'http://').replace(/\/ws\/segment$/, '');
+      await fetch(`${baseUrl}/location`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(loc),
+      });
+    } catch (err) {
+      console.error('[WebSocket] Location send error:', err);
+    }
+  }, [url]);
+
   const sendFrame = useCallback((encodedData: EncodedFrameData) => {
     if (ws.current?.readyState === WebSocket.OPEN && !isSendingFrame.current) {
       const now = Date.now();
@@ -25,12 +38,17 @@ export const useWebSocket = (url: string) => {
       }
       lastSendTime.current = now;
       isSendingFrame.current = true;
+
+      if (location) {
+        sendLocation(location);
+      }
+
       console.log(`[WebSocket] Sending frame: ${encodedData.width}x${encodedData.height}, ${encodedData.buffer.byteLength} bytes`);
       ws.current.send(encodedData.buffer);
     } else if (ws.current?.readyState !== WebSocket.OPEN) {
       console.log(`[WebSocket] Cannot send frame - socket state: ${ws.current?.readyState}`);
     }
-  }, []);
+  }, [location, sendLocation]);
 
   const connect = useCallback(() => {
     console.log(`[WebSocket] Attempting connection to ${url}...`);
@@ -98,5 +116,5 @@ export const useWebSocket = (url: string) => {
     };
   }, [connect]);
 
-  return { isConnected, detections, sendFrame };
+  return { isConnected, detections, sendFrame, sendLocation };
 };

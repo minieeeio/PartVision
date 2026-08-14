@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.websocket import router as websocket_router
+from api.reconstruction import router as reconstruction_router
 from core.metrics import start_monitoring, get_resource_monitor
 from config import settings
 
@@ -21,6 +22,7 @@ app.add_middleware(
 )
 
 app.include_router(websocket_router)
+app.include_router(reconstruction_router)
 
 
 @app.on_event("startup")

@@ -16,6 +16,8 @@ model_wrapper = PartLiteUNetWrapper()
 if model_wrapper.is_loaded:
     get_inference_metrics().record_model_load(time.perf_counter() - _model_load_start)
 
+latest_location_store: dict = {}
+
 
 @router.get("/health")
 def health_check():
@@ -48,7 +50,6 @@ def server_metrics():
     m = metrics.get_metrics()
     s = monitor.get_stats()
 
-    # Flatten into a simple key-value dict suitable for monitoring / Prometheus
     flat = {}
 
     flat["partvision_model_loaded"] = 1 if model_wrapper.is_loaded else 0
@@ -79,6 +80,14 @@ def server_metrics():
     return {"metrics": flat, "detailed": {"inference": m, "system": s}}
 
 
+@router.post("/location")
+async def update_location(location: dict):
+    """Receive GPS location updates from the client."""
+    latest_location_store.clear()
+    latest_location_store.update(location)
+    return {"status": "ok"}
+
+
 @router.websocket("/ws/segment")
 async def websocket_segmentation_endpoint(websocket: WebSocket):
     """
@@ -87,7 +96,7 @@ async def websocket_segmentation_endpoint(websocket: WebSocket):
     bounding boxes back to the client.
 
     Client sends:  binary JPEG bytes (one frame per message).
-    Server responds: JSON with ``detections`` and ``process_time_ms``.
+    Server responds: JSON with ``detections``, ``process_time_ms``, and optional ``location``.
     """
     await websocket.accept()
     print("[WebSocket] Client connected successfully.")
@@ -142,6 +151,8 @@ async def websocket_segmentation_endpoint(websocket: WebSocket):
                 "detections": detections,
                 "process_time_ms": metrics.get_metrics().get("current_latency_ms", 0) or 0,
             }
+            if latest_location_store:
+                response_payload["location"] = dict(latest_location_store)
 
             await websocket.send_json(response_payload)
 

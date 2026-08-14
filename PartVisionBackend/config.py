@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     
     # Inference preprocessing
     USE_REMBG: bool = True
+    
+    # Reconstruction frame quality
+    BLUR_THRESHOLD: float = 100.0
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

@@ -1,4 +1,12 @@
-// Represents a single detected object returned by the AI model
+export interface LocationData {
+  latitude: number;
+  longitude: number;
+  accuracy: number;
+  altitude: number | null;
+  speed: number | null;
+  timestamp: number;
+}
+
 export interface PartDetection {
   label: string;      // e.g., "FRONT_BUMPER", "HEADLIGHT_L"
   confidence: number; // e.g., 0.92 (92% certainty)
@@ -9,8 +17,8 @@ export interface PartDetection {
   polygon?: { x: number; y: number }[]; // Normalized polygon points from segmentation mask
 }
 
-// The full JSON response wrapper received over WebSocket from FastAPI
 export interface DetectionResponse {
   detections: PartDetection[];
   process_time_ms: number; // Backend latency measurement
+  location?: LocationData;
 }

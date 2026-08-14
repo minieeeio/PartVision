@@ -3,41 +3,46 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.websocket import router as websocket_router
+from core.metrics import start_monitoring, get_resource_monitor
 from config import settings
 
-# 1. Initialize FastAPI Application Instance
 app = FastAPI(
     title="PartVision AI Backend",
-    description="Real-time car part segmentation and detection server for CoreScan iOS",
-    version="1.0.0"
+    description="Real-time car part segmentation and detection server",
+    version="1.0.0",
 )
 
-# 2. Configure Cross-Origin Resource Sharing (CORS) Rules
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust allowed origins in strict production environments
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 3. Mount WebSocket API Router
 app.include_router(websocket_router)
 
-# 4. Health-Check Endpoint for Server Diagnostics
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "online",
-        "device": settings.DEVICE,
-        "confidence_threshold": settings.CONFIDENCE_THRESHOLD
-    }
 
-# 5. Standalone Execution Entry Point
+@app.on_event("startup")
+async def startup_event():
+    print(f"[Main] Server starting on {settings.HOST}:{settings.PORT}")
+    print(f"[Main] Model path: {settings.MODEL_PATH}")
+    print(f"[Main] Device: {settings.DEVICE}")
+    start_monitoring()
+    print("[Main] Resource monitoring started.")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    get_resource_monitor().stop()
+    print("[Main] Resource monitoring stopped.")
+
+
 if __name__ == "__main__":
+    print("[Main] Starting uvicorn directly...")
     uvicorn.run(
         "main:app",
         host=settings.HOST,
         port=settings.PORT,
-        reload=True  # Enables auto-reloading during backend development
+        reload=False,
     )

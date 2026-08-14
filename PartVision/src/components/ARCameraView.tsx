@@ -1,52 +1,46 @@
-import React from 'react';
-import { StyleSheet, View, Text } from 'react-native';
-import { 
-  Camera, 
-  useCameraDevice, 
-  useFrameOutput, 
-  Frame 
-} from 'react-native-vision-camera';
-import { useRunOnJS } from 'react-native-worklets-core';
-import { encodeFrameToBase64 } from '../utils/frameEncoder';
+import React, { useRef, useEffect } from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+import { Camera, useCameraDevice } from 'react-native-vision-camera';
+import type { EncodedFrameData } from '../utils/frameEncoder';
 
 interface ARCameraViewProps {
-  onFrameCaptured?: (frameData: string) => void;
+  onFrameCaptured?: (frameData: EncodedFrameData) => void;
   isActive?: boolean;
 }
 
-export const ARCameraView: React.FC<ARCameraViewProps> = ({ 
-  onFrameCaptured, 
-  isActive = true 
+export const ARCameraView: React.FC<ARCameraViewProps> = ({
+  onFrameCaptured,
+  isActive = true,
 }) => {
   const device = useCameraDevice('back');
+  const camera = useRef<any>(null);
+  const isCapturing = useRef(false);
 
-  // 1. Memoize the JS callback so it can safely be called inside C++ Worklets
-  const handleFrameCapturedOnJS = useRunOnJS((encodedData: string) => {
-    if (onFrameCaptured) {
-      onFrameCaptured(encodedData);
-    }
-  }, [onFrameCaptured]);
+  useEffect(() => {
+    if (!isActive) return;
 
-  // 2. High-performance frame listener
-  const frameOutput = useFrameOutput({
-    pixelFormat: 'yuv',
-    onFrame: (frame: Frame) => {
-      'worklet';
+    const interval = setInterval(async () => {
+      if (isCapturing.current || !camera.current) return;
+      isCapturing.current = true;
+
       try {
-        const encodedData = encodeFrameToBase64(frame);
-        
-        if (encodedData) {
-          // Call the memoized thread wrapper without re-instantiating functions
-          handleFrameCapturedOnJS(encodedData);
-        }
-      } catch (error) {
-        // Handle worklet frame processing error
+        const image = await camera.current.takeSnapshot();
+        const encoded = image.toEncodedImageData('jpg', 70);
+
+        onFrameCaptured?.({
+          buffer: encoded.buffer,
+          width: encoded.width,
+          height: encoded.height,
+        });
+      } catch (err) {
+        console.error('[Camera] Snapshot error:', err);
       } finally {
-        // ALWAYS release native frame buffer to avoid memory leaks
-        frame.dispose();
+        isCapturing.current = false;
       }
-    },
-  });
+    }, 200);
+
+    return () => clearInterval(interval);
+  }, [isActive, onFrameCaptured]);
 
   if (!device) {
     return (
@@ -58,10 +52,10 @@ export const ARCameraView: React.FC<ARCameraViewProps> = ({
 
   return (
     <Camera
+      ref={camera}
       style={StyleSheet.absoluteFill}
       device={device}
       isActive={isActive}
-      outputs={[frameOutput]}
     />
   );
 };

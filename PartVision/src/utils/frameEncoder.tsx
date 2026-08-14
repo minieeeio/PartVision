@@ -1,21 +1,30 @@
-import { Frame } from 'react-native-vision-camera';
+import { Frame, HybridFrameConverter } from 'react-native-vision-camera';
 
-/**
- * Prepares camera frame data for network transmission.
- * Runs on a dedicated JS worklet thread.
- */
-export const encodeFrameToBase64 = (frame: Frame): string | null => {
+export interface EncodedFrameData {
+  buffer: ArrayBuffer;
+  width: number;
+  height: number;
+}
+
+const TARGET_WIDTH = 640;
+const TARGET_HEIGHT = 480;
+const JPEG_QUALITY = 70;
+
+export const encodeFrameToJpeg = (frame: Frame): EncodedFrameData | null => {
   'worklet';
   if (!frame || !frame.isValid) return null;
 
   try {
-    // Generates a structured frame payload string
-    return JSON.stringify({
-      width: frame.width,
-      height: frame.height,
-      timestamp: frame.timestamp,
-    });
-  } catch (error) {
+    const image = HybridFrameConverter.convertFrameToImage(frame);
+    const resized = image.resize(TARGET_WIDTH, TARGET_HEIGHT);
+    const encoded = resized.toEncodedImageData('jpg', JPEG_QUALITY);
+
+    return {
+      buffer: encoded.buffer,
+      width: encoded.width,
+      height: encoded.height,
+    };
+  } catch {
     return null;
   }
 };

@@ -6,6 +6,7 @@ export interface PartDetection {
   y_min: number;
   width: number;
   height: number;
+  polygon?: { x: number; y: number }[]; // Normalized polygon points from segmentation mask
 }
 
 // The full JSON response wrapper received over WebSocket from FastAPI

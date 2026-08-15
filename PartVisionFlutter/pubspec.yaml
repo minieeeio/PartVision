@@ -1,0 +1,25 @@
+name: part_vision
+description: Real-time car part segmentation and detection.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  camera: ^0.11.0
+  web_socket_channel: ^2.4.0
+  http: ^1.2.0
+  image: ^4.5.0
+  permission_handler: ^11.0.0
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: false

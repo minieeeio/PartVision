@@ -1,0 +1,93 @@
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE / editor
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+*.suo
+*.user
+*.pid
+*.seed
+
+# Node / React Native
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.expo/
+.expo-shared/
+web-build/
+dist/
+build/
+*.tsbuildinfo
+*.log
+
+# React Native / Expo generated
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+android/captures/
+android/*.iml
+android/gradle/
+android/gradlew
+android/gradlew.bat
+android/settings.gradle
+android/app/src/main/java/com/partvision/
+
+# Flutter
+PartVisionFlutter/build/
+PartVisionFlutter/.dart_tool/
+PartVisionFlutter/.packages
+PartVisionFlutter/pubspec.lock
+PartVisionFlutter/android/.gradle/
+PartVisionFlutter/android/app/build/
+PartVisionFlutter/android/local.properties
+PartVisionFlutter/ios/Pods/
+PartVisionFlutter/ios/.symlinks/
+PartVisionFlutter/ios/Flutter/Generated.xcconfig
+PartVisionFlutter/ios/Flutter/ephemeral/
+PartVisionFlutter/ios/Runner/GeneratedPluginRegistrant.*
+
+# Python / backend
+PartVisionBackend/__pycache__/
+PartVisionBackend/**/__pycache__/
+PartVisionBackend/.pytest_cache/
+PartVisionBackend/.mypy_cache/
+PartVisionBackend/.ruff_cache/
+PartVisionBackend/*.egg-info/
+PartVisionBackend/dist/
+PartVisionBackend/*.pyc
+PartVisionBackend/*.pyo
+PartVisionBackend/*.pyd
+PartVisionBackend/.env
+PartVisionBackend/.venv/
+PartVisionBackend/venv/
+PartVisionBackend/part_vision/
+PartVisionBackend/reconstructions/
+PartVisionBackend/weights/
+PartVisionBackend/*.log
+PartVisionBackend/.DS_Store
+
+# Secrets / configs
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.jks
+*.mobileprovision
+
+# Misc
+.git/
+.kilo/
+*.orig
+*.tmp
+*.temp

@@ -1,0 +1,453 @@
+import 'package:camera/camera.dart';
+import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+import '../services/camera_service.dart';
+import '../services/config_service.dart';
+import '../services/web_socket_service.dart';
+import '../widgets/bounding_box_painter.dart';
+import '../widgets/hud.dart';
+
+class CameraScreen extends StatefulWidget {
+  const CameraScreen({super.key});
+
+  @override
+  State<CameraScreen> createState() => _CameraScreenState();
+}
+
+class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver {
+  CameraController? _controller;
+  List<CameraDescription> _cameras = [];
+  bool _isLoading = true;
+  String? _configError;
+  int _lastFrameTime = 0;
+  final WebSocketService _wsService = WebSocketService();
+  String? _apiBaseUrl;
+
+  bool _isRecording = false;
+  bool _showInfo = false;
+  bool _isSendingFrame = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _initialize();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _stopRecording();
+    _controller?.dispose();
+    _wsService.dispose();
+    super.dispose();
+  }
+
+  Future<void> _initialize() async {
+    await _requestCameraPermission();
+    await _loadCameras();
+  }
+
+  Future<void> _requestCameraPermission() async {
+    final status = await Permission.camera.request();
+    if (status.isPermanentlyDenied && mounted) {
+      _showPermissionDenied();
+    }
+  }
+
+  Future<void> _loadCameras() async {
+    try {
+      _cameras = await availableCameras();
+      if (_cameras.isEmpty) {
+        setState(() => _configError = 'No cameras found');
+        return;
+      }
+      await _startCamera(_cameras.first);
+    } catch (e) {
+      setState(() => _configError = 'Camera error: $e');
+    }
+  }
+
+  Future<void> _startCamera(CameraDescription description) async {
+    _controller?.dispose();
+    _controller = CameraController(
+      description,
+      ResolutionPreset.high,
+      enableAudio: false,
+      imageFormatGroup: ImageFormatGroup.yuv420,
+    );
+
+    try {
+      await _controller!.initialize();
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _configError = null;
+      });
+    } catch (e) {
+      setState(() => _configError = 'Camera init error: $e');
+    }
+  }
+
+  Future<void> _startRecording() async {
+    if (_controller == null || !_controller!.value.isInitialized) return;
+
+    setState(() {
+      _isRecording = true;
+      _configError = null;
+      _showInfo = false;
+    });
+
+    _controller!.startImageStream(_onFrameAvailable);
+    _fetchConfigAndConnect(); // Fire-and-forget; errors handled in callback
+  }
+
+  Future<void> _stopRecording() async {
+    if (!_isRecording) return;
+
+    try {
+      await _controller?.stopImageStream();
+    } catch (_) {}
+    _wsService.disconnect();
+    setState(() {
+      _isRecording = false;
+      _showInfo = false;
+    });
+  }
+
+  Future<void> _fetchConfigAndConnect() async {
+    try {
+      debugPrint('[Camera] Fetching remote config...');
+      final config = await ConfigService.fetchRemoteConfig();
+      final baseUrl = config.apiBaseUrl;
+      debugPrint('[Camera] Raw api_base_url from config: "$baseUrl"');
+
+      if (baseUrl.isEmpty) {
+        throw Exception('api_base_url is empty in remote config');
+      }
+
+      setState(() => _apiBaseUrl = baseUrl);
+
+      final wsUrl = ConfigService.resolveWebSocketUrl(baseUrl);
+      debugPrint('[Camera] Resolved WebSocket URL: $wsUrl');
+
+      _wsService.connect(baseUrl);
+    } catch (e) {
+      debugPrint('[Camera] Config/connect error: $e');
+      if (mounted) {
+        setState(() => _configError = 'Config error: $e');
+        _stopRecording();
+      }
+    }
+  }
+
+  void _onFrameAvailable(CameraImage image) async {
+    if (!_isRecording) return;
+    if (_isSendingFrame) return;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastFrameTime < FrameProcessor.frameIntervalMs) return;
+    if (!_wsService.isConnected) {
+      debugPrint('[Camera] Frame skipped: WebSocket not connected (status=${_wsService.status})');
+      return;
+    }
+
+    _lastFrameTime = now;
+    _isSendingFrame = true;
+
+    try {
+      final jpegBytes = await FrameProcessor.encodeJpeg(image);
+      if (jpegBytes != null) {
+        await _wsService.sendFrame(jpegBytes);
+      }
+    } catch (e) {
+      debugPrint('[Camera] Frame processing error: $e');
+    } finally {
+      _isSendingFrame = false;
+    }
+  }
+
+  void _toggleRecording() {
+    if (_isRecording) {
+      _stopRecording();
+    } else {
+      _startRecording();
+    }
+  }
+
+  void _showPermissionDenied() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1c1c1e),
+        title: const Text('Camera Permission Required', style: TextStyle(color: Colors.white)),
+        content: const Text('Please enable camera access in settings.', style: TextStyle(color: Color(0xFFcccccc))),
+        actions: [
+          TextButton(
+            onPressed: () => openAppSettings(),
+            child: const Text('Open Settings', style: TextStyle(color: Color(0xFF0066cc))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: _buildBody(),
+      ),
+    );
+  }
+
+  Widget _buildBody() {
+    if (_configError != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, color: Color(0xFFFF4444), size: 48),
+              const SizedBox(height: 16),
+              Text(_configError!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 16)),
+              const SizedBox(height: 24),
+              TextButton(
+                onPressed: _initialize,
+                child: const Text('Retry', style: TextStyle(color: Color(0xFF0066cc))),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_isLoading || _controller == null || !_controller!.value.isInitialized) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: Color(0xFF0066cc)),
+            SizedBox(height: 16),
+            Text('Loading camera...', style: TextStyle(color: Colors.white)),
+          ],
+        ),
+      );
+    }
+
+    final size = MediaQuery.of(context).size;
+
+    Widget cameraPreview = SizedBox.expand(
+      child: CameraPreview(_controller!),
+    );
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        cameraPreview,
+        ListenableBuilder(
+          listenable: _wsService,
+          builder: (context, _) {
+            return CustomPaint(
+              painter: BoundingBoxPainter(
+                detections: _wsService.detections,
+                frameSize: Size(_controller!.value.previewSize!.width, _controller!.value.previewSize!.height),
+                viewSize: size,
+              ),
+              size: size,
+            );
+          },
+        ),
+        if (_isRecording && _wsService.status == 'connecting')
+          const Positioned(
+            top: 48,
+            left: 16,
+            child: _ConnectingIndicator(),
+          ),
+        if (_isRecording)
+          Positioned(
+            top: _wsService.status == 'connecting' ? 80 : 48,
+            left: 16,
+            child: _InfoToggle(
+              isExpanded: _showInfo,
+              onToggle: () => setState(() => _showInfo = !_showInfo),
+            ),
+          ),
+        if (_showInfo)
+          Positioned(
+            top: 96,
+            left: 16,
+            right: 16,
+            child: HUD(
+              wsStatus: _wsService.status,
+              processTimeMs: _wsService.processTimeMs > 0 ? _wsService.processTimeMs : null,
+              backendUrl: _apiBaseUrl,
+            ),
+          ),
+        Positioned(
+          bottom: 48,
+          left: 0,
+          right: 0,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _RecordButton(
+                isRecording: _isRecording,
+                onTap: _toggleRecording,
+              ),
+            ],
+          ),
+        ),
+        if (_isRecording)
+          Positioned(
+            bottom: 120,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0x99000000),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  'Recording',
+                  style: TextStyle(
+                    color: _wsService.status == 'connected' ? const Color(0xFF00ff88) : const Color(0xFFFF4444),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.5,
+                    fontFamily: '.SF Pro Text',
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _RecordButton extends StatelessWidget {
+  final bool isRecording;
+  final VoidCallback onTap;
+
+  const _RecordButton({
+    required this.isRecording,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: 80,
+        height: 80,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: isRecording ? Colors.white : const Color(0xFFFF3B30),
+          border: Border.all(color: Colors.white, width: 4),
+        ),
+        child: Center(
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: isRecording ? 28 : 0,
+            height: isRecording ? 28 : 0,
+            decoration: const BoxDecoration(
+              color: Color(0xFFFF3B30),
+              borderRadius: BorderRadius.all(Radius.circular(4)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _InfoToggle extends StatelessWidget {
+  final bool isExpanded;
+  final VoidCallback onToggle;
+
+  const _InfoToggle({
+    required this.isExpanded,
+    required this.onToggle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onToggle,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0x99000000),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              isExpanded ? Icons.expand_more : Icons.info_outline_rounded,
+              color: Colors.white,
+              size: 18,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              isExpanded ? 'Hide Info' : 'Info',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                fontFamily: '.SF Pro Text',
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ConnectingIndicator extends StatelessWidget {
+  const _ConnectingIndicator();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0x99000000),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Color(0xFF0066cc),
+            ),
+          ),
+          SizedBox(width: 8),
+          Text(
+            'Connecting...',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              fontFamily: '.SF Pro Text',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

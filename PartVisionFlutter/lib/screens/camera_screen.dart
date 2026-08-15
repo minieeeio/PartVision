@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
 
 import '../services/camera_service.dart';
@@ -27,6 +29,10 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   bool _isRecording = false;
   bool _showInfo = false;
   bool _isSendingFrame = false;
+  String _selectedModel = 'partlitunet';
+  bool _isCountdownActive = false;
+  int _countdownValue = 3;
+  Timer? _countdownTimer;
 
   @override
   void initState() {
@@ -38,6 +44,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _countdownTimer?.cancel();
     _stopRecording();
     _controller?.dispose();
     _wsService.dispose();
@@ -90,19 +97,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     }
   }
 
-  Future<void> _startRecording() async {
-    if (_controller == null || !_controller!.value.isInitialized) return;
-
-    setState(() {
-      _isRecording = true;
-      _configError = null;
-      _showInfo = false;
-    });
-
-    _controller!.startImageStream(_onFrameAvailable);
-    _fetchConfigAndConnect(); // Fire-and-forget; errors handled in callback
-  }
-
   Future<void> _stopRecording() async {
     if (!_isRecording) return;
 
@@ -120,7 +114,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     try {
       debugPrint('[Camera] Fetching remote config...');
       final config = await ConfigService.fetchRemoteConfig();
-      final baseUrl = config.apiBaseUrl;
+      var baseUrl = config.apiBaseUrl;
       debugPrint('[Camera] Raw api_base_url from config: "$baseUrl"');
 
       if (baseUrl.isEmpty) {
@@ -172,7 +166,100 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     if (_isRecording) {
       _stopRecording();
     } else {
-      _startRecording();
+      _startCountdownAndConnect();
+    }
+  }
+
+  void _startCountdownAndConnect() {
+    setState(() {
+      _isCountdownActive = true;
+      _countdownValue = 3;
+      _isRecording = true;
+    });
+
+    _connectWebSocket();
+
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_countdownValue > 1) {
+        setState(() {
+          _countdownValue--;
+        });
+      } else {
+        timer.cancel();
+        setState(() {
+          _isCountdownActive = false;
+        });
+        _startImageStream();
+      }
+    });
+  }
+
+  Future<void> _connectWebSocket() async {
+    try {
+      if (_apiBaseUrl == null) {
+        debugPrint('[Camera] No cached config, fetching before connect...');
+        await _fetchConfigAndConnect();
+      } else {
+        final wsUrl = ConfigService.resolveWebSocketUrl(_apiBaseUrl!);
+        debugPrint('[Camera] Connecting to WebSocket: $wsUrl');
+        _wsService.connect(_apiBaseUrl!);
+      }
+    } catch (e) {
+      debugPrint('[Camera] Connection error: $e');
+    }
+  }
+
+  void _startImageStream() {
+    if (_controller == null || !_controller!.value.isInitialized) return;
+    _controller!.startImageStream(_onFrameAvailable);
+  }
+
+  Future<void> _onModelChanged(String newModel) async {
+    setState(() {
+      _selectedModel = newModel;
+    });
+
+    debugPrint('[Camera] Model toggle changed to: $newModel');
+
+    try {
+      if (_apiBaseUrl == null) {
+        debugPrint('[Camera] No cached config, fetching before model switch...');
+        final config = await ConfigService.fetchRemoteConfig();
+        final baseUrl = config.apiBaseUrl;
+        if (baseUrl.isEmpty) throw Exception('api_base_url is empty');
+        setState(() => _apiBaseUrl = baseUrl);
+      }
+
+      final modelType = newModel == 'yolo' ? 'yolo' : 'partlitunet';
+      await _switchBackendModel(modelType);
+    } catch (e) {
+      debugPrint('[Camera] Model switch error: $e');
+    }
+  }
+
+  Future<void> _switchBackendModel(String modelType) async {
+    if (_apiBaseUrl == null) {
+      debugPrint('[Camera] Cannot switch model: _apiBaseUrl is null');
+      return;
+    }
+    try {
+      final baseUrl = _apiBaseUrl!.replaceFirst(RegExp(r'/+$'), '');
+      final switchUrl = '$baseUrl/switch_model?model_type=$modelType';
+      debugPrint('[Camera] Switching backend model to: $modelType');
+      debugPrint('[Camera] POST $switchUrl');
+
+      final response = await http.post(Uri.parse(switchUrl)).timeout(
+        const Duration(seconds: 5),
+      );
+
+      debugPrint('[Camera] Model switch status: ${response.statusCode}');
+      debugPrint('[Camera] Model switch response: ${response.body}');
+
+      if (response.statusCode != 200) {
+        debugPrint('[Camera] Model switch failed with status ${response.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('[Camera] Model switch exception: $e');
     }
   }
 
@@ -262,6 +349,10 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
             );
           },
         ),
+        if (_isCountdownActive)
+          Positioned.fill(
+            child: _CountdownOverlay(count: _countdownValue),
+          ),
         if (_isRecording && _wsService.status == 'connecting')
           const Positioned(
             top: 48,
@@ -288,21 +379,43 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
               backendUrl: _apiBaseUrl,
             ),
           ),
-        Positioned(
-          bottom: 48,
-          left: 0,
-          right: 0,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _RecordButton(
-                isRecording: _isRecording,
-                onTap: _toggleRecording,
-              ),
-            ],
+        if (!_isRecording && !_isCountdownActive)
+          Positioned(
+            bottom: 48,
+            left: 0,
+            right: 0,
+            child: Column(
+              children: [
+                _ModelToggle(
+                  selectedModel: _selectedModel,
+                  onModelChanged: (model) {
+                    _onModelChanged(model);
+                  },
+                ),
+                const SizedBox(height: 16),
+                _RecordButton(
+                  isRecording: _isRecording,
+                  onTap: _toggleRecording,
+                ),
+              ],
+            ),
           ),
-        ),
-        if (_isRecording)
+        if (_isRecording && !_isCountdownActive)
+          Positioned(
+            bottom: 48,
+            left: 0,
+            right: 0,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _RecordButton(
+                  isRecording: _isRecording,
+                  onTap: _toggleRecording,
+                ),
+              ],
+            ),
+          ),
+        if (_isRecording && !_isCountdownActive)
           Positioned(
             bottom: 120,
             left: 0,
@@ -362,6 +475,112 @@ class _RecordButton extends StatelessWidget {
             decoration: const BoxDecoration(
               color: Color(0xFFFF3B30),
               borderRadius: BorderRadius.all(Radius.circular(4)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ModelToggle extends StatelessWidget {
+  final String selectedModel;
+  final ValueChanged<String> onModelChanged;
+
+  const _ModelToggle({
+    required this.selectedModel,
+    required this.onModelChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0x99000000),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _ModelChip(
+            label: 'Custom',
+            isSelected: selectedModel == 'partlitunet',
+            onTap: () => onModelChanged('partlitunet'),
+          ),
+          const SizedBox(width: 8),
+          _ModelChip(
+            label: 'YOLO',
+            isSelected: selectedModel == 'yolo',
+            onTap: () => onModelChanged('yolo'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ModelChip extends StatelessWidget {
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _ModelChip({
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFF0066cc) : const Color(0x33000000),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? const Color(0xFF0066cc) : const Color(0x66ffffff),
+            width: 1,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSelected ? Colors.white : const Color(0xFFcccccc),
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            fontFamily: '.SF Pro Text',
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CountdownOverlay extends StatelessWidget {
+  final int count;
+
+  const _CountdownOverlay({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0x66000000),
+      child: Center(
+        child: AnimatedScale(
+          scale: 1.0,
+          duration: const Duration(milliseconds: 300),
+          child: Text(
+            '$count',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 120,
+              fontWeight: FontWeight.w300,
+              fontFamily: '.SF Pro Display',
+              letterSpacing: -2,
             ),
           ),
         ),

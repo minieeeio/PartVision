@@ -6,15 +6,10 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from core.decoder import FrameDecoder
 from core.postprocess import PostProcessor
 from core.metrics import get_inference_metrics, get_resource_monitor
-from models.model_loader import PartLiteUNetWrapper
 from config import settings
+from model_manager import model_manager
 
 router = APIRouter()
-
-_model_load_start = time.perf_counter()
-model_wrapper = PartLiteUNetWrapper()
-if model_wrapper.is_loaded:
-    get_inference_metrics().record_model_load(time.perf_counter() - _model_load_start)
 
 latest_location_store: dict = {}
 
@@ -25,12 +20,16 @@ def health_check():
     metrics = get_inference_metrics()
     monitor = get_resource_monitor()
 
+    current_model = model_manager.get_current_model_type()
+    available = model_manager.get_available_models()
+
     health_info = {
         "status": "online",
         "device": settings.DEVICE,
         "model_path": settings.MODEL_PATH,
-        "model_loaded": model_wrapper.is_loaded,
-        "model_load_time_seconds": metrics.get_metrics().get("model_load_time_seconds"),
+        "current_model": current_model,
+        "available_models": available,
+        "model_loaded": any(available.values()),
         "input_size": list(settings.INPUT_SIZE),
         "confidence_threshold": settings.CONFIDENCE_THRESHOLD,
         "num_classes": len(PostProcessor.CLASS_LABELS),
@@ -51,9 +50,7 @@ def server_metrics():
     s = monitor.get_stats()
 
     flat = {}
-
-    flat["partvision_model_loaded"] = 1 if model_wrapper.is_loaded else 0
-    flat["partvision_model_load_time_seconds"] = m.get("model_load_time_seconds") or 0.0
+    flat["partvision_model_loaded"] = 1 if any(model_manager.get_available_models().values()) else 0
     flat["partvision_total_inferences"] = m["total_inferences"]
     flat["partvision_total_errors"] = m["total_errors"]
     flat["partvision_error_rate_percent"] = m["error_rate"]
@@ -99,7 +96,7 @@ async def websocket_segmentation_endpoint(websocket: WebSocket):
     Server responds: JSON with ``detections``, ``process_time_ms``, and optional ``location``.
     """
     await websocket.accept()
-    print("[WebSocket] Client connected successfully.")
+    print(f"[WebSocket] Client connected successfully. Current model: {model_manager.get_current_model_type()}")
 
     metrics = get_inference_metrics()
 
@@ -125,34 +122,42 @@ async def websocket_segmentation_endpoint(websocket: WebSocket):
 
             orig_h, orig_w = frame.shape[:2]
             print(f"[WebSocket] Decoded frame: {orig_w}x{orig_h}")
-            raw_output, meta = model_wrapper.predict(frame)
 
-            if raw_output is None:
-                metrics.record_error()
-                raw_output = np.zeros(
-                    (len(PostProcessor.CLASS_LABELS),
-                     settings.INPUT_SIZE[1],
-                     settings.INPUT_SIZE[0]),
-                    dtype=np.float32,
-                )
-                meta = {}
+            start_time = time.perf_counter()
+            current_model = model_manager.get_current_model_type()
+
+            if current_model == "yolo":
+                detections = _run_yolo_inference(frame)
             else:
-                metrics.record_inference(
-                    batch_size=1,
-                    frame_shape=(orig_h, orig_w),
+                raw_output, meta = model_manager.current_wrapper.predict(frame)
+                if raw_output is None:
+                    metrics.record_error()
+                    raw_output = np.zeros(
+                        (len(PostProcessor.CLASS_LABELS),
+                         settings.INPUT_SIZE[1],
+                         settings.INPUT_SIZE[0]),
+                        dtype=np.float32,
+                    )
+                    meta = {}
+                else:
+                    metrics.record_inference(
+                        batch_size=1,
+                        frame_shape=(orig_h, orig_w),
+                    )
+                    print(f"[WebSocket] Raw output stats: shape={raw_output.shape}, min={raw_output.min():.4f}, max={raw_output.max():.4f}, mean={raw_output.mean():.4f}")
+
+                detections = PostProcessor.process_masks(
+                    raw_output=raw_output,
+                    original_shape=(orig_h, orig_w),
+                    letterbox_meta=meta,
                 )
-                print(f"[WebSocket] Raw output stats: shape={raw_output.shape}, min={raw_output.min():.4f}, max={raw_output.max():.4f}, mean={raw_output.mean():.4f}")
 
-            detections = PostProcessor.process_masks(
-                raw_output=raw_output,
-                original_shape=(orig_h, orig_w),
-                letterbox_meta=meta,
-            )
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            print(f"[WebSocket] Sent {len(detections)} detections in {elapsed_ms:.1f}ms (model={current_model})")
 
-            print(f"[WebSocket] Sent {len(detections)} detections")
             response_payload = {
                 "detections": detections,
-                "process_time_ms": metrics.get_metrics().get("current_latency_ms", 0) or 0,
+                "process_time_ms": round(elapsed_ms, 1),
             }
             if latest_location_store:
                 response_payload["location"] = dict(latest_location_store)
@@ -172,3 +177,73 @@ async def websocket_segmentation_endpoint(websocket: WebSocket):
             await websocket.close()
         except (RuntimeError, WebSocketDisconnect):
             pass
+
+
+def _run_yolo_inference(frame: np.ndarray) -> list:
+    yolo_wrapper = model_manager.current_wrapper
+    if yolo_wrapper is None or not yolo_wrapper.is_loaded:
+        print("[YOLO] Model not loaded, returning empty detections")
+        return []
+
+    try:
+        import cv2
+        h, w = frame.shape[:2]
+        results = yolo_wrapper.model.predict(
+            source=frame,
+            device=yolo_wrapper.device,
+            verbose=False,
+            conf=0.25,
+            iou=0.45,
+        )
+
+        detections = []
+        if results and len(results) > 0:
+            result = results[0]
+            boxes = result.boxes
+            masks = result.masks
+
+            if boxes is not None and len(boxes) > 0:
+                for i in range(len(boxes)):
+                    x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy()
+                    conf = float(boxes.conf[i].cpu().numpy())
+                    cls = int(boxes.cls[i].cpu().numpy())
+                    label = result.names[cls]
+
+                    x_min = float(x1) / w
+                    y_min = float(y1) / h
+                    width = float(x2 - x1) / w
+                    height = float(y2 - y1) / h
+
+                    polygon = []
+                    if masks is not None and i < len(masks):
+                        mask = masks[i].data[0].cpu().numpy()
+                        contours, _ = cv2.findContours(
+                            (mask * 255).astype(np.uint8),
+                            cv2.RETR_EXTERNAL,
+                            cv2.CHAIN_APPROX_SIMPLE,
+                        )
+                        if contours and len(contours) > 0:
+                            largest = max(contours, key=cv2.contourArea)
+                            epsilon = 0.01 * cv2.arcLength(largest, True)
+                            approx = cv2.approxPolyDP(largest, epsilon, True)
+                            for pt in approx:
+                                px = float(pt[0][0]) / w
+                                py = float(pt[0][1]) / h
+                                polygon.append({"x": round(px, 4), "y": round(py, 4)})
+
+                    detections.append({
+                        "label": label,
+                        "confidence": round(conf, 3),
+                        "x_min": round(x_min, 4),
+                        "y_min": round(y_min, 4),
+                        "width": round(width, 4),
+                        "height": round(height, 4),
+                        "polygon": polygon,
+                    })
+
+        return detections
+    except Exception as e:
+        print(f"[YOLO] Inference error: {e}")
+        import traceback
+        traceback.print_exc()
+        return []

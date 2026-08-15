@@ -5,8 +5,8 @@ Real-time car-part segmentation and detection system. A mobile client streams li
 ## What's in this repository
 
 - `PartVisionBackend/` — FastAPI inference server (PyTorch/ONNX, OpenCV, WebSocket)
-- `PartVision/` — React Native mobile client (Expo, react-native-vision-camera)
 - `PartVisionFlutter/` — Flutter mobile client (camera, web_socket_channel, image)
+- `PartVision/` — React Native / Expo mobile client (Expo, react-native-vision-camera)
 
 ## Status
 
@@ -16,7 +16,8 @@ Active development. Not for general release.
 
 - **Frontend**: Node.js 18+, JDK 17, Android Studio + SDK
 - **Backend**: Python 3.11, NVIDIA GPU with CUDA 12.8 (or CPU mode)
-- **Model weights**: Place `best.onnx` in `PartVisionBackend/weights/`
+- **Model weights**: Place `best.onnx` (PartLiteUNet) or `best.pt` (YOLOv8-seg) in `PartVisionBackend/weights/`
+- **YOLO**: `pip install ultralytics`
 
 ## Backend setup
 
@@ -33,15 +34,46 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 # Install backend dependencies
 pip install -r requirements.txt
 
-# Run server
-python main.py
+# Install YOLO dependencies
+pip install ultralytics
 ```
 
+## Running the main server (PartLiteUNet)
+
 Server starts on `http://0.0.0.0:5555` with WebSocket at `ws://0.0.0.0:5555/ws/segment`.
+
+```bash
+python main.py
+```
 
 For CPU-only mode:
 ```bash
 USE_CUDA=false python main.py
+```
+
+## Running the YOLO server (YOLOv8-seg)
+
+The YOLO server runs on a separate port (`5556`) and uses the same WebSocket protocol.
+
+```bash
+python yolo_main.py
+```
+
+For CPU-only mode:
+```bash
+USE_CUDA=false python yolo_main.py
+```
+
+Server starts on `http://0.0.0.0:5556` with WebSocket at `ws://0.0.0.0:5556/ws/segment`.
+
+**YOLO model setup:**
+- Place your YOLOv8-seg `best.pt` in `PartVisionBackend/weights/`
+- The server auto-detects `.pt` files and uses the YOLO wrapper
+- Supported models: YOLOv8-seg, YOLOv11-seg (any segmentation model trained with Ultralytics)
+
+**YOLO health endpoint:**
+```bash
+curl http://localhost:5556/health
 ```
 
 ## Frontend setup (Flutter)
@@ -91,11 +123,20 @@ All coordinates are normalized `0.0` – `1.0` relative to the original frame di
 
 ## Backend endpoints
 
+### Main server (PartLiteUNet) — port 5555
+
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Server status, model info, system resources |
 | GET | `/metrics` | Inference latency, throughput, CPU/memory |
 | POST | `/location` | Receive GPS location updates |
+| WS | `/ws/segment` | Persistent WebSocket for frame streaming and detection results |
+
+### YOLO server (YOLOv8-seg) — port 5556
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Server status, model info, device |
 | WS | `/ws/segment` | Persistent WebSocket for frame streaming and detection results |
 
 ## Mobile app configuration
@@ -106,6 +147,10 @@ The mobile client resolves the backend URL at runtime from remote config:
 - Fallback: `app.json` `expo.extra.backendUrl` (Expo) or manifest metadata (Flutter)
 
 For local testing, update the remote config file or hardcode your backend IP in the frontend config service.
+
+**Using with YOLO server:**
+- Point `api_base_url` to the YOLO server address (default port 5556)
+- Example: `http://192.168.1.100:5556`
 
 ## Building the Android APK
 
@@ -137,7 +182,8 @@ eas build --platform android --profile preview
 PartVision/
 ├── PartVisionBackend/           # FastAPI inference server
 │   ├── api/
-│   │   ├── websocket.py         # WebSocket endpoint
+│   │   ├── websocket.py         # WebSocket endpoint (PartLiteUNet)
+│   │   ├── yolo_websocket.py    # WebSocket endpoint (YOLOv8-seg)
 │   │   └── reconstruction.py    # Reconstruction session API
 │   ├── core/
 │   │   ├── decoder.py           # JPEG frame decoder
@@ -145,11 +191,14 @@ PartVision/
 │   │   ├── metrics.py           # Latency, throughput, resource monitor
 │   │   └── reconstructor.py     # 3D reconstruction pipeline
 │   ├── models/
-│   │   ├── model_loader.py      # ONNX / PyTorch wrapper
+│   │   ├── model_loader.py      # ONNX / PyTorch wrapper (PartLiteUNet)
+│   │   ├── yolo_model_loader.py # YOLOv8-seg wrapper
 │   │   └── part_lite_unet.py    # Model architecture
-│   ├── weights/                 # Place best.onnx here
+│   ├── weights/                 # Place best.onnx or best.pt here
 │   ├── tests/                   # pytest suite
-│   ├── main.py                  # Uvicorn entry point
+│   ├── main.py                  # Uvicorn entry point (PartLiteUNet)
+│   ├── yolo_main.py             # Uvicorn entry point (YOLOv8-seg)
+│   ├── yolo_config.py           # YOLO-specific settings
 │   └── requirements.txt
 ├── PartVisionFlutter/           # Flutter mobile client
 │   ├── lib/

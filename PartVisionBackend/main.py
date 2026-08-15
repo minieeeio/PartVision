@@ -6,6 +6,7 @@ from api.websocket import router as websocket_router
 from api.reconstruction import router as reconstruction_router
 from core.metrics import start_monitoring, get_resource_monitor
 from config import settings
+from model_manager import model_manager
 
 app = FastAPI(
     title="PartVision AI Backend",
@@ -25,11 +26,26 @@ app.include_router(websocket_router)
 app.include_router(reconstruction_router)
 
 
+@app.post("/switch_model")
+def switch_model(model_type: str):
+    result = model_manager.switch_model(model_type)
+    return result
+
+
+@app.get("/models")
+def list_models():
+    return {
+        "current_model": model_manager.get_current_model_type(),
+        "available_models": model_manager.get_available_models(),
+    }
+
+
 @app.on_event("startup")
 async def startup_event():
     print(f"[Main] Server starting on {settings.HOST}:{settings.PORT}")
     print(f"[Main] Model path: {settings.MODEL_PATH}")
     print(f"[Main] Device: {settings.DEVICE}")
+    print(f"[Main] Current model: {model_manager.get_current_model_type()}")
     start_monitoring()
     print("[Main] Resource monitoring started.")
 

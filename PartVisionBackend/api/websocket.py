@@ -1,8 +1,10 @@
 import time
+import json
+import threading
 import numpy as np
 import cv2
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-
+import traceback
 from core.decoder import FrameDecoder
 from core.postprocess import PostProcessor
 from core.metrics import get_inference_metrics, get_resource_monitor
@@ -12,6 +14,7 @@ from model_manager import model_manager
 router = APIRouter()
 
 latest_location_store: dict = {}
+location_lock = threading.Lock()
 
 
 @router.get("/health")
@@ -80,8 +83,9 @@ def server_metrics():
 @router.post("/location")
 async def update_location(location: dict):
     """Receive GPS location updates from the client."""
-    latest_location_store.clear()
-    latest_location_store.update(location)
+    with location_lock:
+        latest_location_store.clear()
+        latest_location_store.update(location)
     return {"status": "ok"}
 
 
@@ -92,7 +96,10 @@ async def websocket_segmentation_endpoint(websocket: WebSocket):
     frames as binary JPEG data and streaming real-time car-part segmentation
     bounding boxes back to the client.
 
-    Client sends:  binary JPEG bytes (one frame per message).
+    Client sends:
+      - binary JPEG bytes (one frame per message)
+      - JSON control messages: {"type": "switch_model", "model_type": "yolo"}
+
     Server responds: JSON with ``detections``, ``process_time_ms``, and optional ``location``.
     """
     await websocket.accept()
@@ -102,76 +109,137 @@ async def websocket_segmentation_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            print("[WebSocket] Waiting for frame bytes...")
-            frame_bytes = await websocket.receive_bytes()
-            print(f"[WebSocket] Received {len(frame_bytes)} bytes")
-            metrics.start_inference()
+            message = await websocket.receive()
 
-            frame = FrameDecoder.decode_jpeg(frame_bytes)
-            if frame is None:
-                metrics.record_error()
+            if "bytes" in message and message["bytes"] is not None:
+                frame_bytes = message["bytes"]
+                print(f"[WebSocket] Received {len(frame_bytes)} bytes")
+                metrics.start_inference()
+
                 try:
-                    await websocket.send_json({
-                        "detections": [],
-                        "process_time_ms": 0,
-                        "error": "frame_decode_failed",
-                    })
-                except RuntimeError:
-                    break
-                continue
-
-            orig_h, orig_w = frame.shape[:2]
-            print(f"[WebSocket] Decoded frame: {orig_w}x{orig_h}")
-
-            start_time = time.perf_counter()
-            current_model = model_manager.get_current_model_type()
-
-            if current_model == "yolo":
-                detections = _run_yolo_inference(frame)
-            else:
-                raw_output, meta = model_manager.current_wrapper.predict(frame)
-                if raw_output is None:
+                    frame = FrameDecoder.decode_jpeg(frame_bytes)
+                except Exception:
+                    print("[WebSocket] FrameDecoder.decode_jpeg raised exception:")
+                    traceback.print_exc()
                     metrics.record_error()
-                    raw_output = np.zeros(
-                        (len(PostProcessor.CLASS_LABELS),
-                         settings.INPUT_SIZE[1],
-                         settings.INPUT_SIZE[0]),
-                        dtype=np.float32,
-                    )
-                    meta = {}
-                else:
-                    metrics.record_inference(
-                        batch_size=1,
-                        frame_shape=(orig_h, orig_w),
-                    )
-                    print(f"[WebSocket] Raw output stats: shape={raw_output.shape}, min={raw_output.min():.4f}, max={raw_output.max():.4f}, mean={raw_output.mean():.4f}")
+                    try:
+                        await websocket.send_json({
+                            "detections": [],
+                            "process_time_ms": 0,
+                            "error": "frame_decode_failed",
+                        })
+                    except RuntimeError:
+                        break
+                    continue
 
-                detections = PostProcessor.process_masks(
-                    raw_output=raw_output,
-                    original_shape=(orig_h, orig_w),
-                    letterbox_meta=meta,
-                )
+                if frame is None:
+                    metrics.record_error()
+                    try:
+                        await websocket.send_json({
+                            "detections": [],
+                            "process_time_ms": 0,
+                            "error": "frame_decode_failed",
+                        })
+                    except RuntimeError:
+                        break
+                    continue
 
-            elapsed_ms = (time.perf_counter() - start_time) * 1000
-            print(f"[WebSocket] Sent {len(detections)} detections in {elapsed_ms:.1f}ms (model={current_model})")
+                orig_h, orig_w = frame.shape[:2]
+                print(f"[WebSocket] Decoded frame: {orig_w}x{orig_h}")
 
-            response_payload = {
-                "detections": detections,
-                "process_time_ms": round(elapsed_ms, 1),
-            }
-            if latest_location_store:
-                response_payload["location"] = dict(latest_location_store)
+                start_time = time.perf_counter()
+                current_model = model_manager.get_current_model_type()
 
-            try:
-                await websocket.send_json(response_payload)
-            except RuntimeError:
-                print("[WebSocket] Send failed: connection already closed")
-                break
+                try:
+                    if current_model == "yolo":
+                        detections = _run_yolo_inference(frame)
+                    else:
+                        raw_output, meta = model_manager.current_wrapper.predict(frame)
+                        if raw_output is None:
+                            metrics.record_error()
+                            raw_output = np.zeros(
+                                (len(PostProcessor.CLASS_LABELS),
+                                 settings.INPUT_SIZE[1],
+                                 settings.INPUT_SIZE[0]),
+                                dtype=np.float32,
+                            )
+                            meta = {}
+                        else:
+                            metrics.record_inference(
+                                batch_size=1,
+                                frame_shape=(orig_h, orig_w),
+                            )
+                            print(f"[WebSocket] Raw output stats: shape={raw_output.shape}, min={raw_output.min():.4f}, max={raw_output.max():.4f}, mean={raw_output.mean():.4f}")
+
+                        detections = PostProcessor.process_masks(
+                            raw_output=raw_output,
+                            original_shape=(orig_h, orig_w),
+                            letterbox_meta=meta,
+                        )
+                except Exception:
+                    print(f"[WebSocket] Inference raised exception for model={current_model}:")
+                    traceback.print_exc()
+                    metrics.record_error()
+                    detections = []
+
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+                print(f"[WebSocket] Sent {len(detections)} detections in {elapsed_ms:.1f}ms (model={current_model})")
+
+                response_payload = {
+                    "detections": detections,
+                    "process_time_ms": round(elapsed_ms, 1),
+                }
+                with location_lock:
+                    if latest_location_store:
+                        response_payload["location"] = dict(latest_location_store)
+
+                try:
+                    await websocket.send_json(response_payload)
+                except RuntimeError:
+                    print("[WebSocket] Send failed: connection already closed")
+                    break
+
+            elif "text" in message and message["text"] is not None:
+                text = message["text"]
+                print(f"[WebSocket] Received JSON control: {text}")
+                try:
+                    control = json.loads(text)
+                    msg_type = control.get("type")
+                    if msg_type == "switch_model":
+                        model_type = control.get("model_type")
+                        print(f"[WebSocket] Switch request: model_type={model_type}")
+                        if model_type in ("partlitunet", "yolo"):
+                            result = model_manager.switch_model(model_type)
+                            print(f"[WebSocket] Switched model via WS: {result}")
+                            try:
+                                await websocket.send_json({
+                                    "type": "model_switched",
+                                    "current_model": model_manager.get_current_model_type(),
+                                    "available_models": model_manager.get_available_models(),
+                                    "switch_result": result,
+                                })
+                            except RuntimeError:
+                                break
+                        else:
+                            print(f"[WebSocket] Rejected unknown model_type: {model_type}")
+                            try:
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": f"Unknown model_type: {model_type}",
+                                })
+                            except RuntimeError:
+                                break
+                    else:
+                        print(f"[WebSocket] Unknown control message type: {msg_type}")
+                except json.JSONDecodeError:
+                    print("[WebSocket] Failed to parse control message as JSON")
+                    traceback.print_exc()
 
     except WebSocketDisconnect:
         print("[WebSocket] Client disconnected cleanly.")
     except Exception as e:
         print(f"[WebSocket Error] Connection exception: {e}")
+        traceback.print_exc()
     finally:
         try:
             await websocket.close()

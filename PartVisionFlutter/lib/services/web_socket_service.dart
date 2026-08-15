@@ -12,13 +12,27 @@ class WebSocketService extends ChangeNotifier {
   double _processTimeMs = 0;
   String _status = 'disconnected';
   String? _error;
+  String _selectedModel = 'partlitunet';
+  VoidCallback? _onConnected;
 
   List<Detection> get detections => List.unmodifiable(_detections);
   double get processTimeMs => _processTimeMs;
   String get status => _status;
   String? get error => _error;
+  String get selectedModel => _selectedModel;
 
   bool get isConnected => _status == 'connected';
+
+  void setSelectedModel(String model) {
+    _selectedModel = model;
+    if (isConnected) {
+      sendControlMessage({'type': 'switch_model', 'model_type': model});
+    }
+  }
+
+  void onConnected(VoidCallback callback) {
+    _onConnected = callback;
+  }
 
   Future<void> connect(String apiBaseUrl) async {
     disconnect();
@@ -45,20 +59,40 @@ class WebSocketService extends ChangeNotifier {
       _error = null;
       notifyListeners();
 
+      if (_selectedModel.isNotEmpty) {
+        sendControlMessage({'type': 'switch_model', 'model_type': _selectedModel});
+      }
+      _onConnected?.call();
+
       _subscription = channel.stream.listen(
         (data) {
           debugPrint('[WS] Received: ${data is String ? "JSON" : "binary"}');
           try {
             if (data is String) {
               final json = jsonDecode(data) as Map<String, dynamic>;
-              final detectionsList = json['detections'] as List<dynamic>? ?? [];
-              _detections.clear();
-              _detections.addAll(
-                detectionsList.map((d) => Detection.fromJson(d as Map<String, dynamic>)),
-              );
-              _processTimeMs = (json['process_time_ms'] as num?)?.toDouble() ?? 0;
-              _error = null;
-              notifyListeners();
+              final msgType = json['type'];
+              if (msgType == 'model_switched') {
+                debugPrint('[WS] Model switched: ${json['current_model']}');
+                final switchResult = json['switch_result'];
+                if (switchResult != null && switchResult['status'] == 'error') {
+                  debugPrint('[WS] Model switch error: ${switchResult['message']}');
+                  final detail = switchResult['detail'];
+                  if (detail != null) {
+                    debugPrint('[WS] Model switch detail: $detail');
+                  }
+                  _error = '${switchResult['message']}${detail != null ? ": $detail" : ""}';
+                  notifyListeners();
+                }
+              } else {
+                final detectionsList = json['detections'] as List<dynamic>? ?? [];
+                _detections.clear();
+                _detections.addAll(
+                  detectionsList.map((d) => Detection.fromJson(d as Map<String, dynamic>)),
+                );
+                _processTimeMs = (json['process_time_ms'] as num?)?.toDouble() ?? 0;
+                _error = null;
+                notifyListeners();
+              }
             }
           } catch (e) {
             _error = 'Parse error: $e';
@@ -100,6 +134,19 @@ class WebSocketService extends ChangeNotifier {
       _channel!.sink.add(jpegBytes);
     } catch (e) {
       debugPrint('[WS] Send error: $e');
+      _error = 'Send error: $e';
+      notifyListeners();
+    }
+  }
+
+  Future<void> sendControlMessage(Map<String, dynamic> message) async {
+    if (_channel == null || _status != 'connected') return;
+    try {
+      final jsonStr = jsonEncode(message);
+      debugPrint('[WS] Sending control: $jsonStr');
+      _channel!.sink.add(jsonStr);
+    } catch (e) {
+      debugPrint('[WS] Control send error: $e');
       _error = 'Send error: $e';
       notifyListeners();
     }

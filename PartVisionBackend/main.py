@@ -28,7 +28,9 @@ app.include_router(reconstruction_router)
 
 @app.post("/switch_model")
 def switch_model(model_type: str):
+    print(f"[Main] /switch_model called with model_type={model_type}")
     result = model_manager.switch_model(model_type)
+    print(f"[Main] /switch_model result: {result}")
     return result
 
 

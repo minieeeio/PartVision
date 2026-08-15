@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
 
 import '../services/camera_service.dart';
@@ -33,6 +32,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   bool _isCountdownActive = false;
   int _countdownValue = 3;
   Timer? _countdownTimer;
+  bool _isConfiguring = false;
 
   @override
   void initState() {
@@ -195,16 +195,28 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   }
 
   Future<void> _connectWebSocket() async {
+    if (_isConfiguring) {
+      debugPrint('[Camera] Config already being fetched, waiting...');
+      return;
+    }
+
     try {
       if (_apiBaseUrl == null) {
         debugPrint('[Camera] No cached config, fetching before connect...');
+        setState(() => _isConfiguring = true);
         await _fetchConfigAndConnect();
+        setState(() => _isConfiguring = false);
       } else {
         final wsUrl = ConfigService.resolveWebSocketUrl(_apiBaseUrl!);
         debugPrint('[Camera] Connecting to WebSocket: $wsUrl');
+        _wsService.onConnected(() {
+          debugPrint('[Camera] WebSocket connected, sending initial model preference: $_selectedModel');
+        });
+        _wsService.setSelectedModel(_selectedModel);
         _wsService.connect(_apiBaseUrl!);
       }
     } catch (e) {
+      setState(() => _isConfiguring = false);
       debugPrint('[Camera] Connection error: $e');
     }
   }
@@ -224,42 +236,20 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     try {
       if (_apiBaseUrl == null) {
         debugPrint('[Camera] No cached config, fetching before model switch...');
+        setState(() => _isConfiguring = true);
         final config = await ConfigService.fetchRemoteConfig();
         final baseUrl = config.apiBaseUrl;
         if (baseUrl.isEmpty) throw Exception('api_base_url is empty');
-        setState(() => _apiBaseUrl = baseUrl);
+        setState(() {
+          _apiBaseUrl = baseUrl;
+          _isConfiguring = false;
+        });
       }
 
-      final modelType = newModel == 'yolo' ? 'yolo' : 'partlitunet';
-      await _switchBackendModel(modelType);
+      _wsService.setSelectedModel(newModel);
     } catch (e) {
+      setState(() => _isConfiguring = false);
       debugPrint('[Camera] Model switch error: $e');
-    }
-  }
-
-  Future<void> _switchBackendModel(String modelType) async {
-    if (_apiBaseUrl == null) {
-      debugPrint('[Camera] Cannot switch model: _apiBaseUrl is null');
-      return;
-    }
-    try {
-      final baseUrl = _apiBaseUrl!.replaceFirst(RegExp(r'/+$'), '');
-      final switchUrl = '$baseUrl/switch_model?model_type=$modelType';
-      debugPrint('[Camera] Switching backend model to: $modelType');
-      debugPrint('[Camera] POST $switchUrl');
-
-      final response = await http.post(Uri.parse(switchUrl)).timeout(
-        const Duration(seconds: 5),
-      );
-
-      debugPrint('[Camera] Model switch status: ${response.statusCode}');
-      debugPrint('[Camera] Model switch response: ${response.body}');
-
-      if (response.statusCode != 200) {
-        debugPrint('[Camera] Model switch failed with status ${response.statusCode}');
-      }
-    } catch (e) {
-      debugPrint('[Camera] Model switch exception: $e');
     }
   }
 
